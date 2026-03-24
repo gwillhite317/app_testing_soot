@@ -20,23 +20,6 @@ URS_BASE  = "https://urs.earthdata.nasa.gov"
 # ---------------------------------------------------------------------------
 
 def session_from_credentials(username: str, password: str) -> requests.Session:
-    """
-    Authenticate with NASA Earthdata by completing the full OAuth2 flow
-    programmatically using the user's username and password.
-
-    Flow:
-      1. GET /soot-api/Authenticate/user  → 302 to URS OAuth page
-      2. Parse URS login form (get authenticity_token)
-      3. POST credentials to URS login endpoint
-      4. URS redirects back → ASDC /soot-api/login?code=xxxx
-      5. ASDC exchanges code for session → sets ASDC session cookie
-      6. Downloads now work
-
-    Credentials are used only within this function and are never stored,
-    logged, or written to persistent storage. The only artifact that
-    survives is the returned requests.Session which holds session cookies —
-    not the original credentials.
-    """
     username = username.strip()
     password = password.strip()
 
@@ -46,17 +29,28 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
     session = requests.Session()
     session.headers.update({"User-Agent": "python-requests/soot-tool"})
 
-    # ── Step 1: Hit ASDC auth endpoint, follow to URS OAuth page ──────────
     r1 = session.get(AUTH_URL, allow_redirects=True, timeout=30)
 
-    # At this point we should be at the URS OAuth authorize page
+    # Case 1: OAuth may already be complete even if cookie inspection is unreliable.
+    # Verify by calling a protected SOOT endpoint directly.
+    test = session.get(
+        f"{BASE_URL}/campaigns",
+        allow_redirects=True,
+        timeout=30,
+        headers={"Accept": "application/json"},
+    )
+
+    if test.status_code == 200:
+        return session
+
+    # Case 2: We are actually on the URS login page and need to submit credentials
     if "urs.earthdata.nasa.gov" not in r1.url:
+        history_urls = [resp.url for resp in r1.history]
         raise RuntimeError(
-            f"Unexpected redirect target: {r1.url}. "
-            "The ASDC auth endpoint may have changed."
+            f"Did not reach URS login page. Final URL: {r1.url}. "
+            f"Redirect chain: {history_urls + [r1.url]}"
         )
 
-    # ── Step 2: Parse the URS login form for the authenticity_token ────────
     authenticity_token = _extract_authenticity_token(r1.text)
     if not authenticity_token:
         raise RuntimeError(
@@ -64,10 +58,8 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
             "The URS login form may have changed."
         )
 
-    # Extract the OAuth params from the current URL so we can pass them along
     oauth_params = _extract_oauth_params(r1.url)
 
-    # ── Step 3: POST credentials to URS ───────────────────────────────────
     login_payload = {
         "username": username,
         "password": password,
@@ -80,7 +72,6 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
         "commit": "Log in",
     }
 
-    # Wipe credentials from local scope immediately after building payload
     username = None
     password = None
 
@@ -91,11 +82,9 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
         timeout=30,
     )
 
-    # Wipe from payload too
     login_payload["username"] = None
     login_payload["password"] = None
 
-    # ── Step 4: Verify we landed back on ASDC, not still on URS ───────────
     if "urs.earthdata.nasa.gov" in r2.url and "oauth" in r2.url.lower():
         raise RuntimeError(
             "Login failed — still on URS after credential submission. "
@@ -108,7 +97,6 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
             "Please check your username and password."
         )
 
-    # ── Step 5: Verify ASDC session cookie was set ─────────────────────────
     asdc_cookies = [
         c for c in session.cookies
         if "asdc" in c.domain.lower() or "larc" in c.domain.lower()
