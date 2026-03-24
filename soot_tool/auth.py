@@ -1,25 +1,20 @@
-# soot_tool/auth.py
 from __future__ import annotations
 
-import os
 import re
-import tempfile
-from pathlib import Path
 
 import requests
 
 
 BASE_URL  = "https://asdc.larc.nasa.gov/soot-api"
 AUTH_URL  = f"{BASE_URL}/Authenticate/user"
-LOGIN_URL = f"{BASE_URL}/login"
 URS_BASE  = "https://urs.earthdata.nasa.gov"
 
 
-# ---------------------------------------------------------------------------
-# Primary auth: username + password → full OAuth flow → authenticated session
-# ---------------------------------------------------------------------------
-
 def session_from_credentials(username: str, password: str) -> requests.Session:
+    """
+    Authenticate with NASA Earthdata by completing the full OAuth2 flow
+    programmatically using the user's username and password.
+    """
     username = username.strip()
     password = password.strip()
 
@@ -29,28 +24,16 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
     session = requests.Session()
     session.headers.update({"User-Agent": "python-requests/soot-tool"})
 
+    # Step 1: Hit ASDC auth endpoint, follow to URS OAuth page
     r1 = session.get(AUTH_URL, allow_redirects=True, timeout=30)
 
-    # Case 1: OAuth may already be complete even if cookie inspection is unreliable.
-    # Verify by calling a protected SOOT endpoint directly.
-    test = session.get(
-        f"{BASE_URL}/campaigns",
-        allow_redirects=True,
-        timeout=30,
-        headers={"Accept": "application/json"},
-    )
-
-    if test.status_code == 200:
-        return session
-
-    # Case 2: We are actually on the URS login page and need to submit credentials
     if "urs.earthdata.nasa.gov" not in r1.url:
-        history_urls = [resp.url for resp in r1.history]
         raise RuntimeError(
-            f"Did not reach URS login page. Final URL: {r1.url}. "
-            f"Redirect chain: {history_urls + [r1.url]}"
+            f"Unexpected redirect target: {r1.url}. "
+            "The ASDC auth endpoint may have changed."
         )
 
+    # Step 2: Parse URS login form
     authenticity_token = _extract_authenticity_token(r1.text)
     if not authenticity_token:
         raise RuntimeError(
@@ -60,6 +43,7 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
 
     oauth_params = _extract_oauth_params(r1.url)
 
+    # Step 3: Submit credentials
     login_payload = {
         "username": username,
         "password": password,
@@ -85,6 +69,7 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
     login_payload["username"] = None
     login_payload["password"] = None
 
+    # Step 4: Make sure we did not stay on URS
     if "urs.earthdata.nasa.gov" in r2.url and "oauth" in r2.url.lower():
         raise RuntimeError(
             "Login failed — still on URS after credential submission. "
@@ -97,6 +82,7 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
             "Please check your username and password."
         )
 
+    # Step 5: Verify ASDC session cookie exists
     asdc_cookies = [
         c for c in session.cookies
         if "asdc" in c.domain.lower() or "larc" in c.domain.lower()
@@ -111,8 +97,6 @@ def session_from_credentials(username: str, password: str) -> requests.Session:
 
 
 def _extract_authenticity_token(html: str) -> str | None:
-    """Extract the CSRF authenticity_token from the URS login form HTML."""
-    # Try meta tag first (newer URS layout)
     match = re.search(
         r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']',
         html,
@@ -121,7 +105,6 @@ def _extract_authenticity_token(html: str) -> str | None:
     if match:
         return match.group(1)
 
-    # Fall back to hidden input field
     match = re.search(
         r'<input[^>]+name=["\']authenticity_token["\'][^>]+value=["\']([^"\']+)["\']',
         html,
@@ -130,7 +113,6 @@ def _extract_authenticity_token(html: str) -> str | None:
     if match:
         return match.group(1)
 
-    # Try reverse attribute order
     match = re.search(
         r'<input[^>]+value=["\']([^"\']+)["\'][^>]+name=["\']authenticity_token["\']',
         html,
@@ -143,21 +125,16 @@ def _extract_authenticity_token(html: str) -> str | None:
 
 
 def _extract_oauth_params(url: str) -> dict:
-    """Extract OAuth query parameters from the URS authorize URL."""
     from urllib.parse import urlparse, parse_qs
     parsed = urlparse(url)
     params = parse_qs(parsed.query)
     return {k: v[0] for k, v in params.items()}
 
 
-# ---------------------------------------------------------------------------
-# Auth verification
-# ---------------------------------------------------------------------------
-
 def assert_authorized(session: requests.Session, *, timeout: int = 60) -> None:
     """
     Verify the session can reach the SOOT metadata API.
-    Uses the campaigns endpoint which is accessible with a valid session.
+    This is still only a metadata check, not a guaranteed file-download check.
     """
     r = session.get(
         f"{BASE_URL}/campaigns",

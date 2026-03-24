@@ -17,7 +17,7 @@ from soot_tool.pipeline import run_download_convert
 
 
 GRAPH_CSV_PATH = Path(
-    r"C:\Users\grant\OneDrive\School\STAT 370\SOOT_Project\SOOt-project\soot_trimmed.csv"
+    r"soot_tool/soot_trimmed.csv"
 )
 
 
