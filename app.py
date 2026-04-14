@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from soot_tool.graphing import build_altitude_profile_figure
+from soot_tool.graphing import build_figure
 from soot_tool.auth import session_from_credentials, assert_authorized
 from soot_tool.soot_api import (
     get_campaigns,
@@ -15,16 +15,9 @@ from soot_tool.soot_api import (
 )
 from soot_tool.pipeline import run_download_convert
 
-
-GRAPH_CSV_PATH = Path(
-    r"soot_tool/soot_trimmed.csv"
-)
-
-
 @st.cache_data(show_spinner=False)
-def load_demo_graph_df() -> pd.DataFrame:
-    return pd.read_csv(GRAPH_CSV_PATH)
-
+def load_graph_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df
 
 @st.cache_resource(show_spinner="Authenticating with NASA Earthdata...")
 def get_session(uname: str, _password: str):
@@ -32,35 +25,54 @@ def get_session(uname: str, _password: str):
     assert_authorized(session)
     return session
 
-
+# ------------------------------------------------------------
+# Graphing capabilities
+# ------------------------------------------------------------
 def render_graph_page() -> None:
-    st.title("Demo Graph")
-    st.write("This graph is generated from `soot_trimmed.csv`.")
+    st.title("Graph")
+    st.write(f"This graph is generated from {st.session_state['download_filename']}.")
 
     if st.button("← Back to Download Page"):
         st.session_state["page"] = "download"
         st.rerun()
+    
+    if ("download_full_df" not in st.session_state or st.session_state["download_full_df"] is None):
+        st.error("No data loaded. Please try again.")
+        st.stop()
 
-    st.sidebar.header("Graph Controls")
+    graph_df = load_graph_df(st.session_state["download_full_df"])
 
-    bin_m = st.sidebar.slider(
-        "Altitude bin size (m)",
-        min_value=10,
-        max_value=500,
-        value=50,
-        step=10,
-        key="graph_bin_m",
+    graph_cols = sorted(graph_df.columns.astype(str).unique())
+    
+    y_axis = st.selectbox(
+        "Y Axis Variable",
+        graph_cols,
+    )
+    x_axis = st.selectbox(
+        "X Axis Variable",
+        graph_cols,
     )
 
+    st.sidebar.header("Graph Controls")
+    
+    bin_m = st.sidebar.slider(
+        "Bin size (m)",
+        min_value=1,
+        max_value=100,
+        value=50,
+        step=1,
+        key="graph_bin_m",
+    )
+    
     window = st.sidebar.slider(
         "Rolling window (bins)",
         min_value=3,
         max_value=51,
         value=11,
-        step=2,
+        step=1,
         key="graph_window",
     )
-
+    
     show_raw = st.sidebar.checkbox(
         "Show raw scatter",
         value=True,
@@ -74,31 +86,29 @@ def render_graph_page() -> None:
     )
 
     try:
-        demo_df = load_demo_graph_df()
-
         st.caption(
-            f"Using {len(demo_df):,} rows from soot_trimmed.csv "
-            f"| Columns: {', '.join(demo_df.columns.astype(str))}"
+            f"Using {len(graph_df):,} rows from {st.session_state['download_filename']} "
+            f"| Columns: {', '.join(graph_df.columns.astype(str))}"
         )
 
-        fig = build_altitude_profile_figure(
-            demo_df,
-            alt_col="Altitude_m_MSL",
-            ozone_col="Ozone_ppbv",
-            bin_m=bin_m,
-            window=window,
+        fig = build_figure(
+            graph_df,
+            y_col=y_axis,
+            x_col=x_axis,
+            bin_m = bin_m,
+            window = window,
             show_raw=show_raw,
-            show_ci=show_ci,
-            title="Ozone vs Altitude (Demo from soot_trimmed.csv)",
+            show_ci = show_ci,
+            title=f"{x_axis} vs {y_axis} (From {st.session_state['download_filename']})",
         )
 
         st.pyplot(fig)
 
     except Exception as e:
-        st.warning(f"Could not build demo graph from soot_trimmed.csv: {e}")
+        st.warning(f"Could not build graph from {st.session_state["download_filename"]}: {e}")
 
+    st.set_page_config(page_title="NASA SOOT ICARTT Converter", layout="wide")
 
-st.set_page_config(page_title="NASA SOOT ICARTT Converter", layout="wide")
 
 # ------------------------------------------------------------
 # Session state defaults
@@ -109,6 +119,7 @@ defaults = {
     "download_csv_bytes": None,
     "download_filename": None,
     "download_preview_df": None,
+    "download_full_df": None,
     "download_summary": None,
     "saved_username": "",
     "saved_password": "",
@@ -121,6 +132,7 @@ defaults = {
 for key, value in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = value
+
 
 # ------------------------------------------------------------
 # Graph page
@@ -287,9 +299,11 @@ if st.button("Download + Convert", type="primary"):
             f"{campaign}_{year}_{platform}_{pi_lastname}.csv"
         )
         st.session_state["download_preview_df"] = result.df.head(200)
+        st.session_state["download_full_df"] = result.df
         st.session_state["download_summary"] = (
             f"Done. Rows: {result.rows:,} | Columns: {result.cols:,}"
         )
+
 
 # ------------------------------------------------------------
 # Show download results if available
@@ -305,6 +319,6 @@ if st.session_state["download_complete"]:
         mime="text/csv",
     )
 
-    if st.button("Go to Demo Graph Page"):
+    if st.button("Show Graph"):
         st.session_state["page"] = "graph"
         st.rerun()
