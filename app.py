@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from soot_tool.graphing import build_figure
-from soot_tool.auth import session_from_credentials, assert_authorized
+from soot_tool.auth import session_from_token, assert_authorized
 from soot_tool.soot_api import (
     get_campaigns,
     get_years,
@@ -20,8 +20,8 @@ def load_graph_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 @st.cache_resource(show_spinner="Authenticating with NASA Earthdata...")
-def get_session(uname: str, _password: str):
-    session = session_from_credentials(uname, _password)
+def get_session(token: str) -> "requests.Session":
+    session = session_from_token(token)
     assert_authorized(session)
     return session
 
@@ -55,34 +55,34 @@ def render_graph_page() -> None:
 
     st.sidebar.header("Graph Controls")
     
-    bin_m = st.sidebar.slider(
-        "Bin size (m)",
+    poly_order = st.sidebar.slider(
+        "Polygon Order",
         min_value=1,
-        max_value=100,
-        value=50,
+        max_value=20,
+        value=3,
         step=1,
-        key="graph_bin_m",
+        key="graph_poly_order",
     )
     
     window = st.sidebar.slider(
-        "Rolling window (bins)",
+        "Rolling Window (Number of Points)",
         min_value=3,
-        max_value=51,
-        value=11,
+        max_value=1000,
+        value=100,
         step=1,
         key="graph_window",
     )
     
     show_raw = st.sidebar.checkbox(
-        "Show raw scatter",
+        "Show Raw Scatter",
         value=True,
         key="graph_show_raw",
     )
 
-    show_ci = st.sidebar.checkbox(
-        "Show ~95% CI band (SEM)",
+    show_smoothed = st.sidebar.checkbox(
+        "Show Smoothed Graph",
         value=True,
-        key="graph_show_ci",
+        key="graph_show_smoothed",
     )
 
     try:
@@ -95,10 +95,10 @@ def render_graph_page() -> None:
             graph_df,
             y_col=y_axis,
             x_col=x_axis,
-            bin_m = bin_m,
+            poly_order = poly_order,
             window = window,
             show_raw=show_raw,
-            show_ci = show_ci,
+            show_smoothed=show_smoothed,
             title=f"{x_axis} vs {y_axis} (From {st.session_state['download_filename']})",
         )
 
@@ -144,64 +144,33 @@ if st.session_state["page"] == "graph":
 # ------------------------------------------------------------
 # Download page
 # ------------------------------------------------------------
+st.set_page_config(page_title="NASA SOOT ICARTT Converter", layout="wide")
 st.title("NASA SOOT — ICARTT Downloader + CSV Converter")
 
+st.write("Enter your NASA Earthdata Bearer Token to authorize downloads.")
 st.markdown(
-    "Enter your [NASA Earthdata Login](https://urs.earthdata.nasa.gov) credentials "
-    "to access and download SOOT data."
+    "1. Log in at [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov)\n"
+    "2. Click **Generate Token** from the top-right menu\n"
+    "3. Click **Show Token**, copy it, and paste it below\n\n"
+    "_Tokens are valid for 60 days and can be revoked at any time._"
 )
 
-with st.expander("ℹ️ How your credentials are used", expanded=False):
-    st.markdown(
-        """
-        Your username and password are used **only** to authenticate with NASA's
-        Earthdata Login (urs.earthdata.nasa.gov) on your behalf. Specifically:
+user_token = st.text_input(
+    "Earthdata Bearer Token",
+    type="password",
+    placeholder="Paste your token here...",
+)
 
-        - Credentials are submitted directly to NASA's OAuth2 login endpoint over HTTPS
-        - They are **never stored**, logged, or written to disk
-        - They are discarded from memory immediately after your session is established
-        - Only the resulting session cookie is retained for the duration of your visit
-        - Closing or refreshing the app ends the session entirely
-
-        This is the same authentication method used by NASA's own
-        [earthaccess](https://github.com/nsidc/earthaccess) Python library.
-        """
-    )
-
-# ------------------------------------------------------------
-# Credential inputs
-# ------------------------------------------------------------
-col1, col2 = st.columns(2)
-with col1:
-    username = st.text_input(
-        "Earthdata Username",
-        value=st.session_state["saved_username"],
-        placeholder="Your Earthdata Login username",
-    )
-with col2:
-    password = st.text_input(
-        "Earthdata Password",
-        value=st.session_state["saved_password"],
-        type="password",
-        placeholder="Your Earthdata Login password",
-    )
-
-st.session_state["saved_username"] = username
-st.session_state["saved_password"] = password
-
-if not username or not password:
+if not user_token:
     st.stop()
 
-# ------------------------------------------------------------
-# Authenticate
-# ------------------------------------------------------------
 try:
-    session = get_session(username, password)
+    session = get_session(user_token)
     st.success("Authorized ✅")
 except Exception as e:
     st.error(str(e))
     st.stop()
-
+    
 # ------------------------------------------------------------
 # Campaign selection
 # ------------------------------------------------------------
