@@ -30,7 +30,7 @@ def get_session(token: str) -> "requests.Session":
 # ------------------------------------------------------------
 def render_graph_page() -> None:
     st.title("Graph")
-    st.write(f"This graph is generated from {st.session_state['download_filename']}.")
+    st.write(f"This graph is generated from {st.session_state['download_filename']}. Error bars on the smoothed graph cannot be provided because there is no closed-form solution for these standard errors and bootstrapping to estimate standard errors would slow down the app to make it unusable.")
 
     if st.button("← Back to Download Page"):
         st.session_state["page"] = "download"
@@ -56,9 +56,9 @@ def render_graph_page() -> None:
     st.sidebar.header("Graph Controls")
     
     poly_order = st.sidebar.slider(
-        "Polygon Order",
+        "Polynomial Order",
         min_value=1,
-        max_value=20,
+        max_value=6,
         value=3,
         step=1,
         key="graph_poly_order",
@@ -67,7 +67,7 @@ def render_graph_page() -> None:
     window = st.sidebar.slider(
         "Rolling Window (Number of Points)",
         min_value=3,
-        max_value=1000,
+        max_value=400,
         value=100,
         step=1,
         key="graph_window",
@@ -99,7 +99,7 @@ def render_graph_page() -> None:
             window = window,
             show_raw=show_raw,
             show_smoothed=show_smoothed,
-            title=f"{x_axis} vs {y_axis} (From {st.session_state['download_filename']})",
+            title=f"{x_axis} vs {y_axis} \n (From {st.session_state['download_filename']})",
         )
 
         st.pyplot(fig)
